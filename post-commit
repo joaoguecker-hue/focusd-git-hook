@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# focusd post-commit hook — every commit checks off your "Code" habit.
+# Install: copy this file to .git/hooks/post-commit && chmod +x it.
+# (Prefer firing on push? Save it as .git/hooks/pre-push instead.)
+
+if command -v focusd >/dev/null 2>&1; then
+  focusd check "Code" >/dev/null 2>&1 || true
+fi
