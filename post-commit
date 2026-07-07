@@ -1,8 +1,50 @@
 #!/usr/bin/env bash
-# focusd post-commit hook — every commit checks off your "Code" habit.
-# Install: copy this file to .git/hooks/post-commit && chmod +x it.
-# (Prefer firing on push? Save it as .git/hooks/pre-push instead.)
+# Focusd post-commit hook — every commit feeds your "Code" habit.
+# Get Focusd: https://9482969453720.gumroad.com/l/aopuhv
+#
+# Config (env, sane defaults):
+#   FOCUSD_URL       daemon base URL   (default: http://localhost:8080)
+#   FOCUSD_HABIT_ID  habit to credit   (default: 1)
+#   FOCUSD_DB        SQLite path       (default: ~/.focusd/focus.db)
 
-if command -v focusd >/dev/null 2>&1; then
-  focusd check "Code" >/dev/null 2>&1 || true
+FOCUSD_URL="${FOCUSD_URL:-http://localhost:8080}"
+FOCUSD_HABIT_ID="${FOCUSD_HABIT_ID:-1}"
+FOCUSD_DB="${FOCUSD_DB:-$HOME/.focusd/focus.db}"
+
+# Habit id vai interpolado no SQL — garante que é numérico.
+[[ "$FOCUSD_HABIT_ID" =~ ^[0-9]+$ ]] || FOCUSD_HABIT_ID=1
+
+# 300ms budget, -f para tratar 4xx/5xx como falha. Nunca bloqueia o commit.
+if curl -sf --max-time 0.3 -X POST "$FOCUSD_URL/focus" \
+     --data "habit_id=$FOCUSD_HABIT_ID" \
+     --data "duration_minutes=1" >/dev/null 2>&1; then
+
+  # Streak real: dias consecutivos (em UTC, como o logged_at do daemon)
+  # com pelo menos um log, contando de hoje para trás. Leitura readonly:
+  # o WAL do SQLite permite ler mesmo com o daemon escrevendo.
+  streak="$(sqlite3 -readonly "$FOCUSD_DB" "
+    WITH RECURSIVE streak(d) AS (
+      SELECT date('now')
+       WHERE EXISTS (SELECT 1 FROM focus_logs
+                      WHERE habit_id = $FOCUSD_HABIT_ID
+                        AND date(logged_at) = date('now'))
+      UNION ALL
+      SELECT date(d, '-1 day') FROM streak
+       WHERE EXISTS (SELECT 1 FROM focus_logs
+                      WHERE habit_id = $FOCUSD_HABIT_ID
+                        AND date(logged_at) = date(d, '-1 day'))
+    ) SELECT count(*) FROM streak;" 2>/dev/null)"
+
+  if [[ "$streak" =~ ^[0-9]+$ ]] && [ "$streak" -gt 0 ]; then
+    unit="dias"; [ "$streak" -eq 1 ] && unit="dia"
+    echo -e "\n🚀 Hábito 'Codar' atualizado. Streak: $streak $unit 🔥\n"
+  else
+    # sqlite3 ausente, db em outro caminho... o log foi gravado mesmo assim.
+    echo -e "\n🚀 Hábito 'Codar' atualizado localmente! 🔥\n"
+  fi
+else
+  # Daemon fora do ar: nada foi gravado — dizer "atualizado" seria mentira.
+  echo -e "\n⚡ Focusd offline — rode 'focusd start' para não perder o streak.\n"
 fi
+
+exit 0
